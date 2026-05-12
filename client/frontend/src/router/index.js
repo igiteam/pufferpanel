@@ -4,7 +4,7 @@ import defaultRoute from './defaultRoute'
 
 export default function(api) {
   const router = createRouter({
-    history: createWebHistory(),
+    history: createWebHistory('/pufferpanel/'),  // ← CHANGE THIS LINE
     linkExactActiveClass: 'active',
     routes: makeRoutes(api),
     scrollBehavior (to, from, savedPosition) {
