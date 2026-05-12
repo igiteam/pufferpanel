@@ -6,14 +6,14 @@ on:
     tags:
       - v3.*
     paths-ignore:
-      - '.github/workflows/tester.yml'
-      - '.github/workflows/run-template-tester.yml'
-      - '.github/workflows/formatter.yml'
+      - ".github/workflows/tester.yml"
+      - ".github/workflows/run-template-tester.yml"
+      - ".github/workflows/formatter.yml"
   pull_request:
     branches:
       - v3
     paths-ignore:
-      - 'client/frontend/src/lang/**.json'
+      - "client/frontend/src/lang/**.json"
 
 env:
   SWAG_VERSION: "1.16.4"
@@ -41,13 +41,13 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'yarn'
-          cache-dependency-path: 'client/yarn.lock'
+          cache: "yarn"
+          cache-dependency-path: "client/yarn.lock"
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: 'go.mod'
+          go-version-file: "go.mod"
 
       - name: Restore Go BIN
         id: restore-go-bin
@@ -115,7 +115,7 @@ jobs:
   build-linux-amd64-binaries:
     name: Build Binaries - Linux AMD64
     runs-on: ubuntu-latest
-    needs: [ 'build-shared' ]
+    needs: ["build-shared"]
 
     timeout-minutes: 10
 
@@ -143,7 +143,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: 'go.mod'
+          go-version-file: "go.mod"
 
       - name: Build Linux
         run: |
@@ -183,7 +183,7 @@ jobs:
           before-remove: systemd/scripts/preremove.sh
           after-remove: systemd/scripts/postremove.sh
           after-purge: systemd/scripts/purge.sh
-          extra-dpkg-args: '-Zxz'
+          extra-dpkg-args: "-Zxz"
           suggested-packages: |
             lib32gcc1
 
@@ -241,7 +241,7 @@ jobs:
   build-linux-arm64-binaries:
     name: Build Binaries - Linux ARM64
     runs-on: ubuntu-latest
-    needs: [ 'build-shared' ]
+    needs: ["build-shared"]
 
     timeout-minutes: 10
 
@@ -260,7 +260,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: 'go.mod'
+          go-version-file: "go.mod"
 
       - name: Download APT packages
         run: |
@@ -310,7 +310,7 @@ jobs:
           before-remove: systemd/scripts/preremove.sh
           after-remove: systemd/scripts/postremove.sh
           after-purge: systemd/scripts/purge.sh
-          extra-dpkg-args: '-Zxz'
+          extra-dpkg-args: "-Zxz"
 
       - name: Build Package RPM ARM64
         id: rpmarm64
@@ -364,7 +364,14 @@ jobs:
     runs-on: ubuntu-latest
     name: "Cleanup"
 
-    needs: [ build-shared, build-docker-image-base, build-linux-amd64-binaries, build-linux-arm64-binaries, release ]
+    needs:
+      [
+        build-shared,
+        build-docker-image-base,
+        build-linux-amd64-binaries,
+        build-linux-arm64-binaries,
+        release,
+      ]
 
     continue-on-error: true
 
@@ -386,9 +393,9 @@ jobs:
     timeout-minutes: 15
 
     env:
-      REGISTRY: ${{ vars.REGISTRY != 'docker.com' && vars.REGISTRY || '' }}
-      REGISTRY_USERNAME: ${{ vars.REGISTRY == 'ghcr.io' && github.actor || secrets.REGISTRY_USERNAME }}
-      REGISTRY_PASSWORD: ${{ vars.REGISTRY == 'ghcr.io' && secrets.GITHUB_TOKEN || secrets.REGISTRY_PASSWORD }}
+      REGISTRY: ghcr.io
+      REGISTRY_USERNAME: ${{ github.actor }}
+      REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
       - name: Get the version
@@ -468,7 +475,7 @@ jobs:
     steps:
       - uses: ruby/setup-ruby@v1
         with:
-          ruby-version: '3.3'
+          ruby-version: "3.3"
 
       - name: Install gems
         run: |
@@ -488,7 +495,7 @@ jobs:
         run: |
           package_cloud push ${{ vars.PACKAGECLOUD_REPO }}/any/any */pufferpanel_*_amd64.deb 
           package_cloud push ${{ vars.PACKAGECLOUD_REPO }}/any/any */pufferpanel_*_arm64.deb 
-          package_cloud push ${{ vars.PACKAGECLOUD_REPO }}/rpm_any/rpm_any */pufferpanel-*.x86_64.rpm 
+          package_cloud push ${{ vars.PACKAGECLOUD_REPO }}/rpm_any/rpm_any */pufferpanel-*.x86_64.rpm
 
       - name: Create Release
         id: create_release
