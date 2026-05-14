@@ -13,6 +13,18 @@ import validators from '@/plugins/validators'
 import makeRouter from '@/router'
 import App from "@/App.vue"
 
+// Get base path from meta tag or window (for service worker and other uses)
+const BASE_PATH = document.querySelector('meta[name="panel-base"]')?.getAttribute('content') || window.__PUFFERPANEL_BASE__ || ''
+
+// Optional: Verify apiClient has the correct base path (useful for debugging)
+if (BASE_PATH) {
+  console.log(`PufferPanel running with base path: ${BASE_PATH}`)
+  // If apiClient doesn't have basePath set, set it (as a fallback)
+  if (apiClient._basePath !== BASE_PATH) {
+    apiClient._basePath = BASE_PATH
+  }
+}
+
 const checkEnv = !!import.meta.env.VITE_CHECK_ENV
 if (/app\.github\.dev/.test(window.location.host) && checkEnv) {
   const err = document.createElement('div')
@@ -46,7 +58,11 @@ if (/app\.github\.dev/.test(window.location.host) && checkEnv) {
 }
 
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js', { scope: '/' })
+  // Register service worker with base path
+  const swPath = BASE_PATH ? `${BASE_PATH}/sw.js` : '/sw.js'
+  const swScope = BASE_PATH || '/'
+  navigator.serviceWorker.register(swPath, { scope: swScope })
+    .catch(err => console.warn('Service worker registration failed:', err))
 }
 
 window.pufferpanel = {}
@@ -75,13 +91,15 @@ async function mountApp(config) {
     .mount('#app')
 }
 
+// Get config and mount app
 apiClient
   .getConfig()
   .then(config => {
+    console.log('Config loaded successfully')
     mountApp(config)
   })
   .catch(error => {
-    console.log(error)
+    console.warn('Failed to load config, using defaults:', error)
     mountApp({
       branding: {
         name: 'PufferPanel'
