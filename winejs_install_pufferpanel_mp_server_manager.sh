@@ -223,7 +223,8 @@ cat > "$DATA_DIR/config/config.json" << 'EOF'
     },
     "registrationEnabled": false,
     "settings": {
-      "masterUrl": "https://DOMAIN_PLACEHOLDER/pufferpanel"
+      "masterUrl": "https://DOMAIN_PLACEHOLDER/pufferpanel",
+      "publicIp": "PUBLIC_IP_PLACEHOLDER"
     }
   },
   "web": {
@@ -236,6 +237,11 @@ EOF
 # Replace placeholders
 sed -i "s/DB_PASS_PLACEHOLDER/${DB_PASS}/g" "$DATA_DIR/config/config.json"
 sed -i "s/DOMAIN_PLACEHOLDER/${DOMAIN_NAME}/g" "$DATA_DIR/config/config.json"
+
+# Get public IP automatically
+PUBLIC_IP=$(curl -s ifconfig.me)
+sed -i "s/PUBLIC_IP_PLACEHOLDER/${PUBLIC_IP}/g" "$DATA_DIR/config/config.json"
+ 
 
 # ============= CREATE CONFIG.JSON (CRITICAL FOR APP REGISTRATION) =============
 log "📝 Creating config.json for app registration..."
