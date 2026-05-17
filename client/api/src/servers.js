@@ -31,7 +31,7 @@ export class ServerApi {
     const res = await this._api.get(`/api/servers/${id}?perms`);
     if (withSocket) {
       // Pass the basePath to the Server constructor
-      return new Server(this._api, res.data, this._api._basePath);
+      return new Server(this._api, res.data, this._api._basePath); // ← Pass basePath
     } else {
       return res.data;
     }
@@ -295,7 +295,7 @@ class Server {
   _emitter = null;
   readyState = WebSocket.CONNECTING;
 
-  constructor(api, serverData) {
+  constructor(api, serverData, basePath = "") {
     // inlined https://github.com/ai/nanoevents because just depending on it breaks nodejs somehow...
     this._emitter = {
       events: {},
@@ -351,7 +351,7 @@ class Server {
     if (host.indexOf("https://") === 0) host = host.substr(8);
 
     // Get basePath from the ApiClient (same as HTTP requests use)
-    const basePath = this._api._basePath || "";
+    const basePath = this._basePath || this._api._basePath || "";
 
     // Build the WebSocket path with basePath if it exists
     let wsPath = `/api/servers/${this.id}/socket`;

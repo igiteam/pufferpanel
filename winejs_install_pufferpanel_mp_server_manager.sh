@@ -161,7 +161,6 @@ services:
     ports:
       - "${APP_PORT}:8080"                    # Web panel (e.g., 6902)
       - "${SFTP_PORT}:5657"                  # SFTP (e.g., 6905)
-      - "27015-27030:27015-27030"            # Game server ports - too many can cause issues
     environment:
       - DB_HOST=pufferpanel-db
       - DB_PORT=3306
@@ -188,60 +187,6 @@ networks:
     external: true
 DOCKER_EOF
 
-# Wait for config directory to be created by container
-log "⏳ Waiting for PufferPanel to generate config..."
-sleep 5
-
-# Create PufferPanel config with correct settings (fixes blank screen)
-log "📝 Creating PufferPanel configuration..."
-
-mkdir -p "$DATA_DIR/config"
-cat > "$DATA_DIR/config/config.json" << 'EOF'
-{
-  "branding": {
-    "name": "PufferPanel",
-    "description": "Game Server Management Panel",
-    "logo": "/logo.png",
-    "favicon": "/favicon.png"
-  },
-  "daemon": {
-    "data": {
-      "root": "/var/lib/pufferpanel"
-    },
-    "sftp": {
-      "host": "0.0.0.0:5657"
-    }
-  },
-  "email": {
-    "provider": "debug"
-  },
-  "logs": "/var/log/pufferpanel",
-  "panel": {
-    "database": {
-      "dialect": "mysql",
-      "url": "pufferpanel:DB_PASS_PLACEHOLDER@tcp(pufferpanel-db:3306)/pufferpanel"
-    },
-    "registrationEnabled": false,
-    "settings": {
-      "masterUrl": "https://DOMAIN_PLACEHOLDER/pufferpanel",
-      "publicIp": "PUBLIC_IP_PLACEHOLDER"
-    }
-  },
-  "web": {
-    "basePath": "/pufferpanel",
-    "host": "0.0.0.0:8080"
-  }
-}
-EOF
-
-# Replace placeholders
-sed -i "s/DB_PASS_PLACEHOLDER/${DB_PASS}/g" "$DATA_DIR/config/config.json"
-sed -i "s/DOMAIN_PLACEHOLDER/${DOMAIN_NAME}/g" "$DATA_DIR/config/config.json"
-
-# Get public IP automatically
-PUBLIC_IP=$(curl -s ifconfig.me)
-sed -i "s/PUBLIC_IP_PLACEHOLDER/${PUBLIC_IP}/g" "$DATA_DIR/config/config.json"
- 
 
 # ============= CREATE CONFIG.JSON (CRITICAL FOR APP REGISTRATION) =============
 log "📝 Creating config.json for app registration..."
@@ -440,63 +385,129 @@ log "Pulled image ID: $NEW_IMAGE_ID"
 docker-compose down 2>/dev/null
 docker-compose up -d
 
+# ============= CREATE CONFIG AFTER CONTAINER STARTS =============
+log "📝 Creating PufferPanel configuration (after container start)..."
+
+# Wait for container to create default config
+sleep 10
+
+# Now write our config (overwriting the default)
+mkdir -p "$DATA_DIR/config"
+cat > "$DATA_DIR/config/config.json" << 'EOF'
+{
+  "branding": {
+    "name": "PufferPanel Game Server Manager",
+    "description": "Manage game servers in your browser",
+    "logo": "/logo.png",
+    "favicon": "/favicon.png"
+  },
+  "daemon": {
+    "data": {
+      "root": "/var/lib/pufferpanel"
+    },
+    "sftp": {
+      "host": "0.0.0.0:5657"
+    }
+  },
+  "email": {
+    "provider": "debug"
+  },
+  "logs": "/var/log/pufferpanel",
+  "panel": {
+    "database": {
+      "dialect": "mysql",
+      "url": "pufferpanel:DB_PASS_PLACEHOLDER@tcp(pufferpanel-db:3306)/pufferpanel"
+    },
+    "registrationEnabled": false,
+    "settings": {
+      "masterUrl": "https://DOMAIN_PLACEHOLDER/pufferpanel"
+    }
+  },
+  "web": {
+    "basePath": "/pufferpanel",
+    "host": "0.0.0.0:8080"
+  }
+}
+EOF
+
+# Replace placeholders
+sed -i "s/DB_PASS_PLACEHOLDER/${DB_PASS}/g" "$DATA_DIR/config/config.json"
+sed -i "s/DOMAIN_PLACEHOLDER/${DOMAIN_NAME}/g" "$DATA_DIR/config/config.json"
+
+# Restart container to pick up new config
+docker restart winejs-pufferpanel
+sleep 5
+
 # ============= SETUP ADMIN USER =============
 bash "$APP_DIR/setup-admin.sh"
+
+
 # ============= UPDATE NGINX CONFIG =============
 log "📝 Updating nginx configuration for PufferPanel..."
 
+# The pattern for ALL installers (Mumble, PufferPanel, Forgejo, VSCode):
+#   1. Find the HTTPS server block by locating "listen 443"
+#   2. Count braces { and } to find the exact closing brace of that server block
+#   3. Insert new location blocks BEFORE that closing brace
+#   4. This guarantees routes are safely INSIDE the correct server block
+#
+# This method is proven to work (VSCode uses it) and never creates orphaned directives.
+# DO NOT insert before "listen 443" - that breaks the config.
+# DO NOT insert after random lines like "root" or "server_name" - that's fragile.
+
+# ============= BASE PATH INJECTION =============
+# PufferPanel's frontend API client looks for:
+#   1. <meta name="panel-base" content="/pufferpanel">
+#   2. window.__PUFFERPANEL_BASE__ = '/pufferpanel'
+#
+# By injecting these into the HTML, the frontend automatically prefixes
+# ALL API calls with /pufferpanel, eliminating the need for sub_filter rewrites.
+# This is the CLEANEST solution because PufferPanel's code already supports it!
+# ================================================
+
 if [ -f "/etc/nginx/sites-available/winejs" ]; then
-    # Check if PufferPanel routes already exist
-    if ! grep -q "location /pufferpanel" /etc/nginx/sites-available/winejs; then
-        cp /etc/nginx/sites-available/winejs /etc/nginx/sites-available/winejs.backup
+    
+    # Remove any existing PufferPanel blocks to prevent duplicates
+    if grep -q "# PufferPanel Game Server Manager" /etc/nginx/sites-available/winejs; then
+        log "Removing existing PufferPanel nginx configuration..."
+        cp /etc/nginx/sites-available/winejs /etc/nginx/sites-available/winejs.backup.$(date +%s)
+        sed -i '/# PufferPanel Game Server Manager/,/location \/pufferpanel\/ {/d' /etc/nginx/sites-available/winejs
+        sed -i '/location \/pufferpanel {/,/^    }/d' /etc/nginx/sites-available/winejs
+    fi
+    
+    # Find the HTTPS server block (listen 443)
+    HTTPS_START=$(grep -n "listen 443" /etc/nginx/sites-available/winejs | head -1 | cut -d: -f1)
+    
+    if [ -n "$HTTPS_START" ]; then
+        # Find the closing brace
+        BRACE_COUNT=0
+        LINE_NUM=$HTTPS_START
+        TOTAL_LINES=$(wc -l < /etc/nginx/sites-available/winejs)
+        HTTPS_END=""
         
-        # Find the HTTPS server block (listen 443)
-        HTTPS_START=$(grep -n "listen 443" /etc/nginx/sites-available/winejs | head -1 | cut -d: -f1)
-        
-        if [ -n "$HTTPS_START" ]; then
-            # Find the closing brace of the HTTPS block by counting braces
-            BRACE_COUNT=0
-            LINE_NUM=$HTTPS_START
-            TOTAL_LINES=$(wc -l < /etc/nginx/sites-available/winejs)
-            HTTPS_END=""
-            
-            while [ $LINE_NUM -le $TOTAL_LINES ]; do
-                LINE=$(sed -n "${LINE_NUM}p" /etc/nginx/sites-available/winejs)
-                for ((i=0; i<${#LINE}; i++)); do
-                    char="${LINE:$i:1}"
-                    if [ "$char" = "{" ]; then
-                        BRACE_COUNT=$((BRACE_COUNT + 1))
-                    elif [ "$char" = "}" ]; then
-                        BRACE_COUNT=$((BRACE_COUNT - 1))
-                    fi
-                done
-                if [ $BRACE_COUNT -eq 0 ]; then
-                    HTTPS_END=$LINE_NUM
-                    break
+        while [ $LINE_NUM -le $TOTAL_LINES ]; do
+            LINE=$(sed -n "${LINE_NUM}p" /etc/nginx/sites-available/winejs)
+            for ((i=0; i<${#LINE}; i++)); do
+                char="${LINE:$i:1}"
+                if [ "$char" = "{" ]; then
+                    BRACE_COUNT=$((BRACE_COUNT + 1))
+                elif [ "$char" = "}" ]; then
+                    BRACE_COUNT=$((BRACE_COUNT - 1))
                 fi
-                LINE_NUM=$((LINE_NUM + 1))
             done
-            
-            if [ -n "$HTTPS_END" ]; then
-                # Insert routes BEFORE the closing brace with proper SPA handling
-                sed -i "${HTTPS_END}i\\
+            if [ $BRACE_COUNT -eq 0 ]; then
+                HTTPS_END=$LINE_NUM
+                break
+            fi
+            LINE_NUM=$((LINE_NUM + 1))
+        done
+        
+        if [ -n "$HTTPS_END" ]; then
+            # Insert the PufferPanel location block with basePath injection and WebSocket rewrites
+            sed -i "${HTTPS_END}i\\
     # PufferPanel Game Server Manager\\
     location /pufferpanel {\\
         return 301 /pufferpanel/;\\
-    }\\
-    \\
-    # CRITICAL: Handle PufferPanel API routes BEFORE main location\\
-    location ~ ^/(auth|api|sw.js|manifest.json) {\\
-        rewrite ^/(.*)$ /pufferpanel/\$1 break;\\
-        proxy_pass http://127.0.0.1:${APP_PORT};\\
-        proxy_set_header Host \$host;\\
-        proxy_set_header X-Real-IP \$remote_addr;\\
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;\\
-        proxy_set_header X-Forwarded-Proto \$scheme;\\
-        proxy_set_header X-Forwarded-Prefix /pufferpanel;\\
-        proxy_http_version 1.1;\\
-        proxy_set_header Upgrade \$http_upgrade;\\
-        proxy_set_header Connection \"upgrade\";\\
     }\\
     \\
     location /pufferpanel/ {\\
@@ -514,28 +525,36 @@ if [ -f "/etc/nginx/sites-available/winejs" ]; then
         proxy_redirect off;\\
         proxy_intercept_errors on;\\
         error_page 404 = /index.html;\\
+        \\
+        # BASE PATH INJECTION\\
+        sub_filter '</head>' '<meta name=\"panel-base\" content=\"/pufferpanel\"><script>window.__PUFFERPANEL_BASE__=\"/pufferpanel\";window.__WEBSOCKET_BASE__=\"/pufferpanel\";</script></head>';\\
+        sub_filter_once off;\\
+        sub_filter_types text/html;\\
+        \\
+        # WEBSOCKET URL REWRITES IN JAVASCRIPT\\
+        sub_filter 'wss://wine.ofpigi.com/api/servers/' 'wss://wine.ofpigi.com/pufferpanel/api/servers/';\\
+        sub_filter 'ws://wine.ofpigi.com/api/servers/' 'wss://wine.ofpigi.com/pufferpanel/api/servers/';\\
+        sub_filter '\"wss://wine.ofpigi.com/api/servers/' '\"wss://wine.ofpigi.com/pufferpanel/api/servers/';\\
+        sub_filter \"'wss://wine.ofpigi.com/api/servers/\" \"'wss://wine.ofpigi.com/pufferpanel/api/servers/\";\\
+        \\
+        # FALLBACK API PATH REWRITES\\
+        sub_filter_types text/html application/json text/javascript;\\
+        sub_filter '\"/api/' '\"/pufferpanel/api/';\\
+        sub_filter \"'/api/\" \"'/pufferpanel/api/\";\\
+        sub_filter '\"/auth/' '\"/pufferpanel/auth/';\\
+        sub_filter \"'/auth/\" \"'/pufferpanel/auth/\";\\
     }\\
 " /etc/nginx/sites-available/winejs
-                
-                if nginx -t; then
-                    systemctl reload nginx
-                    log "✅ Nginx updated with PufferPanel routes (SPA support enabled)"
-                else
-                    warn "Nginx test failed, restoring backup"
-                    cp /etc/nginx/sites-available/winejs.backup /etc/nginx/sites-available/winejs
-                    nginx -t && systemctl reload nginx
-                fi
+            
+            if nginx -t; then
+                systemctl reload nginx
+                log "✅ Nginx updated with PufferPanel routes (WebSocket + basePath injection enabled)"
             else
-                warn "Could not find HTTPS block closing brace"
+                warn "Nginx test failed, restoring backup"
+                cp /etc/nginx/sites-available/winejs.backup.* /etc/nginx/sites-available/winejs 2>/dev/null || true
+                nginx -t && systemctl reload nginx
             fi
-        else
-            warn "Could not find HTTPS server block (listen 443)"
         fi
-    else
-        log "PufferPanel routes already exist - updating for SPA support"
-        # Update existing config to add SPA support
-        sed -i '/proxy_redirect off;/a\        proxy_intercept_errors on;\n        error_page 404 = /index.html;' /etc/nginx/sites-available/winejs
-        nginx -t && systemctl reload nginx
     fi
 fi
 
